@@ -1,0 +1,174 @@
+// Structural components 
+module half_adder(output sum, output carry, input a, input b);
+    xor(sum, a, b);
+    and(carry, a, b);
+endmodule
+
+module full_adder(output sum, output carry, input x, input y, input z);
+    wire s1, c1, c2;
+    half_adder h1(s1, c1, x, y);
+    half_adder h2(sum, c2, s1, z);
+    or(carry, c1, c2);
+endmodule
+
+module and_8(output [7:0] Out, input [7:0] A, B);
+    assign Out = A & B;
+endmodule
+
+module or_8(output [7:0] Out, input [7:0] A, B);
+    assign Out = A | B;
+endmodule
+
+// Behavioral adder module
+module adder_forALU #(parameter WIDTH=8) (
+    output [WIDTH-1:0] Sum,
+    output Overflow,
+    input [WIDTH-1:0] A, B,
+    input Carry_in
+);
+    wire [WIDTH:0] result_extended;
+    assign result_extended = A + B + Carry_in;
+    assign Sum = result_extended[WIDTH-1:0];
+    assign Overflow = result_extended[WIDTH] ^ result_extended[WIDTH-1];
+endmodule
+
+// Behavioral multiplexer module
+module mux_forALU #(parameter WIDTH=8) (
+    output [WIDTH-1:0] Out,
+    input [WIDTH-1:0] In0, In1, In2, In3, In4, In5, In6, In7,
+    input [WIDTH-1:0] In8, In9, In10, In11, In12, In13, In14, In15,
+    input [3:0] Select
+);
+    assign Out = (Select == 4'b0000) ? In0 :
+                (Select == 4'b0001) ? In1 :
+                (Select == 4'b0010) ? In2 :
+                (Select == 4'b0011) ? In3 :
+                (Select == 4'b0100) ? In4 :
+                (Select == 4'b0101) ? In5 :
+                (Select == 4'b0110) ? In6 :
+                (Select == 4'b0111) ? In7 :
+                (Select == 4'b1000) ? In8 :
+                (Select == 4'b1001) ? In9 :
+                (Select == 4'b1010) ? In10 :
+                (Select == 4'b1011) ? In11 :
+                (Select == 4'b1100) ? In12 :
+                (Select == 4'b1101) ? In13 :
+                (Select == 4'b1110) ? In14 : In15;
+endmodule
+
+// Main ALU module
+module ALU_8 (
+    output [7:0] Result,
+    output Zero, Negative, Overflow,
+    input [7:0] A, B,
+    input [3:0] AluOp
+);
+    // Wires with multiple underscores as required
+    wire [7:0] adder__result;
+    wire adder__overflow;
+    wire [7:0] adder__input_A, adder__input_B;
+    wire adder__carry_in;
+    
+    wire [7:0] and__result, or__result;
+    wire [7:0] shift__result, rotate__result;
+    wire [7:0] logic__result;
+    
+    // Single adder instance for first four operations (0000, 0001, 0010, 0101)
+    adder_forALU #(8) adder__unit (
+        .Sum(adder__result),
+        .Overflow(adder__overflow),
+        .A(adder__input_A),
+        .B(adder__input_B),
+        .Carry_in(adder__carry_in)
+    );
+    
+    // Adder input selection for arithmetic operations
+    assign adder__input_A = (AluOp == 4'b0001) ? B : A;
+    assign adder__input_B = (AluOp == 4'b0001) ? ~A :
+                           (AluOp == 4'b0010) ? 8'b0 :
+                           (AluOp == 4'b0101) ? ~B : B;
+    assign adder__carry_in = (AluOp == 4'b0001 || AluOp == 4'b0010 || AluOp == 4'b0101) ? 1'b1 : 1'b0;
+    
+    // A == B using the adder (A - B == 0)
+    wire [7:0] equal__result = (adder__result == 8'b0) ? 8'b1 : 8'b0;
+    
+    // Structural logic modules
+    and_8 and__gate(and__result, A, B);
+    or_8 or__gate(or__result, A, B);
+    
+    // Behavioral operations
+    wire [7:0] not__result = ~A;
+    wire [7:0] nand__result = ~(A & B);
+    
+    // Shift operations
+    assign shift__result = (AluOp == 4'b0110) ? {B[6:0], 1'b0} : {B[7], B[7:1]};
+    
+    // Rotate operations
+    assign rotate__result = (AluOp == 4'b1100) ? {A[6:0], A[7]} : {A[0], A[7:1]};
+    
+    // Main multiplexer for operation selection
+    mux_forALU #(8) main__mux (
+        .Out(Result),
+        .In0(adder__result),      // 0000: A + B
+        .In1(adder__result),      // 0001: B - A
+        .In2(adder__result),      // 0010: A + 1
+        .In3(8'b0),               // 0011: unused
+        .In4(8'b0),               // 0100: unused
+        .In5(equal__result),      // 0101: A == B
+        .In6(shift__result),      // 0110: B <<< 1
+        .In7(shift__result),      // 0111: B >>> 1
+        .In8(not__result),        // 1000: not A
+        .In9(and__result),        // 1001: A and B
+        .In10(or__result),        // 1010: A or B
+        .In11(nand__result),      // 1011: A nand B
+        .In12(rotate__result),    // 1100: A ⟲ 1
+        .In13(rotate__result),    // 1101: A ⟳ 1
+        .In14(8'b0),              // 1110: unused
+        .In15(8'b11111111),       // 1111: special flags
+        .Select(AluOp)
+    );
+    
+    // Flag generation
+    assign Zero = (AluOp == 4'b1111) ? 1'b1 : (Result == 8'b0);
+    assign Negative = (AluOp == 4'b1111) ? 1'b1 : Result[7];
+    assign Overflow = (AluOp == 4'b1111) ? 1'b1 : 
+                     ((AluOp == 4'b0000) | (AluOp == 4'b0001) | (AluOp == 4'b0010) | (AluOp == 4'b0101)) ? 
+                     adder__overflow : 1'b0;
+endmodule
+
+// Comprehensive testbench
+module ALU_8_testbench;
+    reg [7:0] A, B;
+    reg [3:0] AluOp;
+    wire [7:0] Result;
+    wire Zero, Negative, Overflow;
+    
+    ALU_8 alu(Result, Zero, Negative, Overflow, A, B, AluOp);
+    
+    initial begin
+        $display("Time AluOp    A       B       Result  Z N O");
+        $monitor("%0t   %b %b %b %b %b %b %b", 
+                $time, AluOp, A, B, Result, Zero, Negative, Overflow);
+        
+        // Test all operations
+        AluOp=4'b0000; A=8'd10; B=8'd5; #10;  // A+B = 15
+        AluOp=4'b0001; A=8'd5; B=8'd10; #10;   // B-A = 5
+        AluOp=4'b0010; A=8'd7; B=8'd0; #10;    // A+1 = 8
+        AluOp=4'b0101; A=8'd10; B=8'd10; #10;  // A==B = 1
+        AluOp=4'b0101; A=8'd10; B=8'd5; #10;   // A==B = 0
+        AluOp=4'b0110; A=8'd0; B=8'b10000001; #10;  // B<<<1
+        AluOp=4'b0111; A=8'd0; B=8'b10000001; #10;  // B>>>1
+        AluOp=4'b1100; A=8'b10000001; B=8'd0; #10;  // A⟲1
+        AluOp=4'b1101; A=8'b10000001; B=8'd0; #10;  // A⟳1
+        AluOp=4'b1000; A=8'b10101010; B=8'd0; #10;  // not A
+        AluOp=4'b1001; A=8'b11110000; B=8'b11001100; #10; // A and B
+        AluOp=4'b1010; A=8'b11110000; B=8'b11001100; #10; // A or B
+        AluOp=4'b1011; A=8'b11110000; B=8'b11001100; #10; // A nand B
+        AluOp=4'b1111; A=8'd0; B=8'd0; #10;    // Special flags
+        
+        // Test overflow
+        AluOp=4'b0000; A=8'd127; B=8'd1; #10;  // Overflow case
+        
+        $finish;
+    end
+endmodule
